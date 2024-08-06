@@ -1,0 +1,84 @@
+<html>
+
+<head>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://js.pusher.com/8.0.1/pusher.min.js"></script>
+</head>
+
+<body>
+  <div id="app" style="width: 100%; height: 500px;">
+    <span>Connection: {{ pushData.connection }}</span><br />
+    <span>Message: {{ pushData.message.data }}</span><br />
+  </div>
+  <script>
+    const { createApp, ref } = Vue;
+    const uri = window.location.search.substring(1);
+    const params = new URLSearchParams(uri);
+
+    const initPusher = (data) => {
+      Pusher.logToConsole = true;
+
+      const pusher = new Pusher(
+        "app-key", // Replace with 'key' from dashboard
+        {
+          wsHost: '127.0.0.1',
+          wsPort: 6001,
+          enableStats: false,
+          enabledTransports: ['ws', 'wss'],
+          cluster: "", // Replace with 'cluster' from dashboard
+          forceTLS: false,
+          userAuthentication: {
+            endpoint: "/pusher/user-auth",
+            transport: "ajax",
+            params: {
+              user: params.get('user') ?? 'unknown'
+            },
+          },
+          channelAuthorization: {
+            endpoint: "/pusher/auth"
+          }
+        }
+      );
+
+
+      pusher.bind('pusher:signin_success', () => {
+        console.log('signin: success');
+      }).bind('pusher:error', (err) => {
+        console.log('signin error: ', err);
+      });
+
+      pusher.connection.bind('state_change', (state) => {
+        data.connection = state.current;
+      }).bind('error', (error) => {
+        data.connection = error;
+      }).bind('connected', () => {
+        pusher.signin();
+
+        const channel = pusher.subscribe('private-message');
+        channel.bind('data', (m) => {
+          data.message.data = m;
+        });
+      });
+
+    };
+
+    createApp({
+      setup() {
+        const pushData = ref({
+          connection: 'unknown',
+          message: {
+            data: 'n/a'
+          }
+        });
+
+        initPusher(pushData.value);
+
+        return {
+          pushData
+        };
+      }
+    }).mount('#app')
+  </script>
+</body>
+
+</html>
