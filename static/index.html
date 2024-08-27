@@ -1,83 +1,206 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
 
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pusher Vue App</title>
   <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
   <script src="https://js.pusher.com/8.0.1/pusher.min.js"></script>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      background-color: #f4f4f9;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    #app {
+      width: 100%;
+      max-width: 600px;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      font-size: 24px;
+      color: #333;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .info-item {
+      margin-bottom: 15px;
+    }
+
+    .info-item span {
+      font-weight: bold;
+      color: #555;
+    }
+
+    .watchlist,
+    .channel,
+    .presence {
+      background: #fafafa;
+      padding: 10px;
+      border-radius: 5px;
+      border: 1px solid #ddd;
+      margin-bottom: 15px;
+    }
+
+    ul {
+      list-style-type: none;
+      padding: 0;
+    }
+
+    li {
+      padding: 5px 0;
+      border-bottom: 1px solid #ddd;
+    }
+
+    li:last-child {
+      border-bottom: none;
+    }
+  </style>
 </head>
 
 <body>
-  <div id="app" style="width: 100%; height: 500px;">
-    <span>Connection: {{ pushData.connection }}</span><br />
-    <span>Message: {{ pushData.message.data }}</span><br />
+  <div id="app">
+    <h1>User Dashboard</h1>
+    <div class="info-item">
+      <span>User:</span> {{ user }}
+    </div>
+    <div class="info-item">
+      <span>Connection Status:</span> {{ pushData.connection }}
+    </div>
+    <div class="watchlist" style="display: none;">
+      <span>Watchlist:</span> {{ watchlist }}
+    </div>
+    <div class="channel">
+      <span>Unit {{ unit }} Channel:</span> {{ pushData.unit.data }} <br />
+      <span>Client Channel:</span> {{ pushData.client.data }} <br />
+      <button @click="sendMessage(unit)">Send Data</button>
+    </div>
+    <div class="presence">
+      <span>Presence Channel Members:</span>
+      <ul>
+        <li v-for="(member, index) in pushData.presence.members" :key="index">{{ member }}</li>
+      </ul>
+    </div>
   </div>
+
   <script>
     const { createApp, ref } = Vue;
-    const uri = window.location.search.substring(1);
-    const params = new URLSearchParams(uri);
 
-    const initPusher = (data) => {
-      Pusher.logToConsole = true;
+    const getUrlParams = () => {
+      const params = new URLSearchParams(window.location.search);
+      return {
+        user: params.get('user') || 'user1',
+        unit: params.get('unit') || 'u1234'
+      };
+    };
 
-      const pusher = new Pusher(
-        "app-key", // Replace with 'key' from dashboard
-        {
-          wsHost: '127.0.0.1',
-          wsPort: 6001,
-          enableStats: false,
-          enabledTransports: ['ws', 'wss'],
-          cluster: "", // Replace with 'cluster' from dashboard
-          forceTLS: false,
-          userAuthentication: {
-            endpoint: "/pusher/user-auth",
-            transport: "ajax",
-            params: {
-              user: params.get('user') ?? 'unknown'
-            },
-          },
-          channelAuthorization: {
-            endpoint: "/pusher/auth"
-          }
-        }
-      );
-
-
-      pusher.bind('pusher:signin_success', () => {
-        console.log('signin: success');
-      }).bind('pusher:error', (err) => {
-        console.log('signin error: ', err);
+    const setupPusher = (data, user, unit) => {
+      const pusher = new Pusher("app-key", {
+        wsHost: '127.0.0.1',
+        wsPort: 6001,
+        enableStats: false,
+        enabledTransports: ['ws', 'wss'],
+        cluster: "",
+        forceTLS: false,
+        userAuthentication: {
+          endpoint: "/pusher/user-auth",
+          transport: "ajax",
+          params: { user },
+        },
+        channelAuthorization: { endpoint: "/pusher/auth" }
       });
 
-      pusher.connection.bind('state_change', (state) => {
-        data.connection = state.current;
-      }).bind('error', (error) => {
+      pusher.connection.bind('state_change', state => data.connection = state.current);
+      pusher.connection.bind('error', error => {
         data.connection = error;
-      }).bind('connected', () => {
-        pusher.signin();
-
-        const channel = pusher.subscribe('private-message');
-        channel.bind('data', (m) => {
-          data.message.data = m;
-        });
       });
 
+      pusher.bind('pusher:signin_success', () => console.log('Signin: success'));
+      pusher.bind('pusher:error', error => console.error('pusher error >>', error));
+
+      const subscribeToChannels = () => {
+        const privateChannel = pusher.subscribe(`private-unit-${unit}`);
+        privateChannel.bind('client-data', message => data.client.data = message);
+        privateChannel.bind('data', message => data.unit.data = message);
+        privateChannel.bind('pusher:subscription_error', error => {
+          console.error('Channel >>', error);
+          data.unit.data = error.error;
+        });
+
+        const presenceChannel = pusher.subscribe(`presence-unit-${unit}`);
+        presenceChannel
+          .bind('pusher:subscription_succeeded', members => {
+            members.each(member => data.presence.members.push(member.info));
+          })
+          .bind('pusher:member_added', member => {
+            data.presence.members.push(member.info);
+          })
+          .bind('pusher:member_removed', member => {
+            const index = data.presence.members.findIndex(m => m.user === member.info.user);
+            if (index !== -1) data.presence.members.splice(index, 1);
+          })
+          .bind('data', (message) => console.log(`presence: `, message))
+          .bind('pusher:subscription_error', error => {
+            console.error('Presence >>', error);
+            data.presence.members = [error.error];
+          });
+
+        const cacheChannel = pusher.subscribe(`private-cache-unit-${unit}`);
+        cacheChannel
+          .bind('data', message => console.log(message))
+          .bind('pusher:cache_miss', () => {
+            console.log('cache miss');
+          });
+      };
+
+      pusher.connection.bind('connected', () => {
+        pusher.signin();
+        // pusher.user.watchlist.bind('online', e => data.watchlist = e);
+        // pusher.user.watchlist.bind('offline', e => data.watchlist = e);
+        subscribeToChannels();
+      });
+
+      return pusher;
     };
 
     createApp({
-      setup() {
+      setup(props, { emit }) {
+        const { user, unit } = getUrlParams();
         const pushData = ref({
           connection: 'unknown',
-          message: {
-            data: 'n/a'
-          }
+          unit: { data: 'n/a' },
+          client: { data: 'n/a' },
+          presence: { members: [] }
         });
+        const watchlist = ref('n/a');
 
-        initPusher(pushData.value);
+
+        const pusher = setupPusher(pushData.value, user, unit);
 
         return {
-          pushData
+          user: ref(user),
+          unit: ref(unit),
+          pushData,
+          watchlist,
+          sendMessage: (unit) => {
+            pusher.channel(`private-unit-${unit}`).trigger('client-data', `Hello from ${user}`);
+          }
         };
-      }
-    }).mount('#app')
+      },
+      emits: ['private-channel']
+    }).mount('#app');
   </script>
 </body>
 
